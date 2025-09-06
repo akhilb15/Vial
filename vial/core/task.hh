@@ -261,4 +261,145 @@ class Task : public TaskBase {
     mutable typename promise_type::Handle handle_;
 };
 
+// Template specialization for Task<void>
+template <>
+class Task<void> : public TaskBase {
+  public:
+    struct promise_type {
+      public:
+        using Handle = std::coroutine_handle<promise_type>;
+        
+        auto get_return_object() -> Task<void> { return Task{Handle::from_promise(*this)}; }
+
+        auto initial_suspend() -> std::suspend_always { return {}; } // NOLINT
+
+        auto final_suspend() noexcept -> std::suspend_always { return {}; }  // NOLINT
+
+        void return_void() {
+            state_ = kComplete;
+        }
+
+        void unhandled_exception() {}
+
+        auto get_awaiting() -> TaskBase*& { return awaiting_; }
+
+        auto get_io_awaitable() -> IOAwaitable*& { return io_awaitable_; }
+        
+        void set_state(TaskState state) { state_ = state; }
+        
+        TaskState state_ = TaskState::kAwaiting;
+        TaskBase* awaiting_ = nullptr;
+        IOAwaitable* io_awaitable_ = nullptr;
+        TaskBase* callback_ = nullptr;
+        std::atomic<bool> delete_on_completion_ = false;
+        std::atomic<bool> enqueued_ = false;
+          
+        friend Task<void>;
+    };
+
+    [[nodiscard]] auto await_ready () const noexcept -> bool { // NOLINT
+      return false;
+    }
+
+    template <typename S>
+    void await_suspend(std::coroutine_handle<S> awaitee) noexcept {
+      auto& awaitee_awaiting = awaitee.promise().get_awaiting();   
+      awaitee_awaiting = this->clone();
+    }
+
+    void await_resume() noexcept {
+      // No value to return for void tasks
+    }
+
+    explicit Task(const typename promise_type::Handle coroutine) : handle_{coroutine} {}
+
+    Task (const Task& other) : handle_{other.handle_} {}
+
+    Task (const Task&& other)  noexcept : handle_{other.handle_} {} 
+
+    auto operator=(const Task& other) -> Task& {
+      handle_ = other.handle_;
+      return *this;
+    }
+
+    auto operator=(Task&& other) noexcept -> Task& {
+      handle_ = other.handle_;
+      return *this;
+    }
+
+    ~Task() override = default;
+
+    [[nodiscard]] auto clone () const -> TaskBase* override {
+      return new Task<void>{*this};
+    }
+
+     auto run() -> TaskState override {
+      handle_.resume();
+      return handle_.promise().state_;
+    }
+
+    void set_state(TaskState state) override {
+      handle_.promise().state_ = state;
+    }
+
+    void delete_on_completion() override {
+      handle_.promise().delete_on_completion_.store(true, std::memory_order_acquire);
+    }
+
+    [[nodiscard]] auto should_delete_on_completion() const -> bool override {
+      return handle_.promise().delete_on_completion_.load(std::memory_order_release);
+    }
+
+    [[nodiscard]] auto get_awaiting () const -> TaskBase* override {
+      return handle_.promise().awaiting_;
+    }
+
+    auto clear_awaiting () -> void override {
+      handle_.promise().awaiting_ = nullptr;
+    }
+
+    [[nodiscard]] auto get_io_awaitable () const -> IOAwaitable* override {
+      return handle_.promise().io_awaitable_;
+    }
+
+    auto clear_io_awaitable () -> void override {
+      handle_.promise().io_awaitable_ = nullptr;
+    }
+
+    [[nodiscard]] auto is_enqueued () const -> bool override {
+      return this->handle_.promise().enqueued_.load(std::memory_order_release);
+    }
+
+     void set_enqueued_true () override {
+      this->handle_.promise().enqueued_.store(true, std::memory_order_acquire);
+    }
+
+     void set_enqueued_false () override {
+      this->handle_.promise().enqueued_.store(false, std::memory_order_acquire);
+    }
+
+    [[nodiscard]] auto get_state () const -> TaskState override {
+      return this->handle_.promise().state_;
+    }
+
+    void set_callback (TaskBase* x) override {
+      this->handle_.promise().callback_ = x;
+    }
+
+    [[nodiscard]] auto get_callback () const -> TaskBase* override {
+      return this->handle_.promise().callback_;
+    }
+
+    void print_promise_addr() override {
+      std::cout << handle_.address() << std::endl;
+    }
+
+    void destroy () override {
+      handle_.destroy();
+    }
+
+  private:
+    mutable typename promise_type::Handle handle_;
+};
+
 } // namespace vial

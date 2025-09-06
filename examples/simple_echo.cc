@@ -5,7 +5,7 @@
 
 using vial::Task;
 
-auto handle_client(vial::net::Socket client) -> Task<int> { 
+auto handle_client(vial::net::Socket client) -> Task<void> { 
     constexpr size_t buffer_size = 1024;
     std::array<std::byte, buffer_size> buffer{};
     
@@ -25,14 +25,14 @@ auto handle_client(vial::net::Socket client) -> Task<int> {
         }
     }
     
-    co_return 0;
+    co_return;
 }
 
-auto echo_server(int port) -> Task<int> {
+auto echo_server(int port) -> Task<void> {
     auto listener = vial::net::listen("0.0.0.0", port);
     if (!listener.is_valid()) {
         std::cerr << "Failed to create listening socket" << std::endl;
-        co_return -1;
+        co_return;
     }
     
     std::cout << "[listener fd:" << listener.fd() << "] Server listening on port " << port << std::endl;
@@ -48,10 +48,10 @@ auto echo_server(int port) -> Task<int> {
         vial::fire_and_forget( handle_client(std::move(client)) );
     }
     
-    co_return 0;
+    co_return;
 }
 
-auto vial::async_main() -> Task<int> {
+auto vial::async_main() -> Task<void> {
     std::signal(SIGINT, [](int) {
         std::cout << "SIGINT received, exiting..." << std::endl;
         vial::shutdown_and_exit();
@@ -59,5 +59,5 @@ auto vial::async_main() -> Task<int> {
 
     constexpr int port = 8080;
     co_await echo_server(port);
-    co_return 0;
+    co_return;
 }

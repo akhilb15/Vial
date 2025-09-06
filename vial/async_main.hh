@@ -14,17 +14,17 @@ namespace vial {
         vial::io_thread.join();
     }
 
-    auto shutdown_and_exit() -> void {
+    auto shutdown_and_exit(int exit_code = 0) -> void {
         _graceful_shutdown();
-        std::exit(0);
+        std::exit(exit_code);
     }
 
-    extern auto async_main() -> Task<int>;
+    extern auto async_main() -> Task<void>;
 
-    auto _launch_async_main() -> Task<int> {
-        auto result = co_await async_main();
+    auto _launch_async_main() -> Task<void> {
+        co_await async_main();
         _graceful_shutdown();
-        co_return result;
+        co_return;
     }
 
     template <typename T>
@@ -45,5 +45,5 @@ auto main () -> int {
 
     vial::scheduler.fire_and_forget( vial::_launch_async_main() );
     vial::scheduler.start();
-    return 1;
+    return 0;
 }
