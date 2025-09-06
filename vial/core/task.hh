@@ -7,10 +7,23 @@
 
 namespace vial {
 
+// Forward declaration
+class IOAwaitable;
+
 enum TaskState : std::uint8_t {
   kAwaiting,
+  kBlockedOnIO,
   kComplete
 };
+
+inline auto operator<<(std::ostream& os, TaskState state) -> std::ostream& {
+    switch (state) {
+        case kAwaiting: return os << "kAwaiting";
+        case kBlockedOnIO: return os << "kBlockedOnIO";
+        case kComplete: return os << "kComplete";
+        default: return os << "Unknown(" << static_cast<int>(state) << ")";
+    }
+}
 
 //! TaskBase is a type-erased base class for Task<T> used for callbacks. 
 class TaskBase {
@@ -26,9 +39,21 @@ class TaskBase {
     //! Start/resume execution of the underlying coroutine.
     virtual auto run () -> TaskState = 0;
 
+    //! Set the state of the task.
+    virtual void set_state(TaskState state) = 0;
+
+    //! Set whether the task should be deleted on completion.
+    //! Should be set to true for fire and forget tasks.
+    [[nodiscard]] virtual auto should_delete_on_completion() const -> bool = 0;
+    virtual void delete_on_completion() = 0;
+
     //! Get a pointer to the awaiting coroutine.
     [[nodiscard]] virtual auto get_awaiting () const -> TaskBase* = 0;
     virtual auto clear_awaiting () -> void = 0;
+
+    //! Get a pointer to the IOAwaitable currently suspended.
+    [[nodiscard]] virtual auto get_io_awaitable () const -> IOAwaitable* = 0;
+    virtual auto clear_io_awaitable () -> void = 0;
 
     //! Get an pointer to a clone of TaskBase (points to the same underlying coroutine)
     [[nodiscard]] virtual auto clone() const -> TaskBase* = 0;
@@ -51,7 +76,7 @@ class TaskBase {
 };
 
 //! Task<T> wraps a std::coroutine_handle to provide callback logic. 
-template <typename T> requires (std::is_copy_constructible_v<T>)
+template <typename T>
 class Task : public TaskBase {
   public:
       //! Underlying heap allocated state of a coroutine.
@@ -69,14 +94,20 @@ class Task : public TaskBase {
 
         //! On `co_return x` set state. 
         void return_value (T x) {
-            result_ = T(x);
+            result_ = std::move(x);
             state_ = kComplete;
         }
 
         //! Handler for unhandled exceptions. 
         void unhandled_exception() {}
 
+        //! return reference to the task currently awaiting.
         auto get_awaiting() -> TaskBase*& { return awaiting_; }
+
+        //! return reference to the IOAwaitable currently suspended.
+        auto get_io_awaitable() -> IOAwaitable*& { return io_awaitable_; }
+        
+        void set_state(TaskState state) { state_ = state; }
         
         private:
           TaskState state_ = TaskState::kAwaiting;
@@ -84,12 +115,20 @@ class Task : public TaskBase {
           // Ownership of task currently awaiting. (Delete on resumption). 
           TaskBase* awaiting_ = nullptr;
 
+          // IOAwaitable that is currently suspended (if state is kBlockedOnIO)
+          IOAwaitable* io_awaitable_ = nullptr;
+
           // To be added back to queue on completion.
           TaskBase* callback_ = nullptr;
+
+          //! Whether the task should be deleted on completion.
+          //! Should be set to true for fire and forget tasks.
+          std::atomic<bool> delete_on_completion_ = false;
           
           std::atomic<bool> enqueued_ = false;
 
-          T result_ = T();
+          T result_{};
+          
         friend Task<T>;
     };
 
@@ -117,7 +156,7 @@ class Task : public TaskBase {
       co_await foo(); // the value here is the return value of await_resume();
     */
     auto await_resume() noexcept -> T {
-      return handle_.promise().result_;
+      return std::move(handle_.promise().result_);
     }
 
     //! Construct a Task from a coroutine handle.
@@ -153,12 +192,32 @@ class Task : public TaskBase {
       return { handle_.promise().state_ };
     }
 
+    void set_state(TaskState state) override {
+      handle_.promise().state_ = state;
+    }
+
+    void delete_on_completion() override {
+      handle_.promise().delete_on_completion_.store(true, std::memory_order_acquire);
+    }
+
+    [[nodiscard]] auto should_delete_on_completion() const -> bool override {
+      return handle_.promise().delete_on_completion_.load(std::memory_order_release);
+    }
+
     [[nodiscard]] auto get_awaiting () const -> TaskBase* override {
       return handle_.promise().awaiting_;
     }
 
     auto clear_awaiting () -> void override {
       handle_.promise().awaiting_ = nullptr;
+    }
+
+    [[nodiscard]] auto get_io_awaitable () const -> IOAwaitable* override {
+      return handle_.promise().io_awaitable_;
+    }
+
+    auto clear_io_awaitable () -> void override {
+      handle_.promise().io_awaitable_ = nullptr;
     }
 
     [[nodiscard]] auto is_enqueued () const -> bool override {
@@ -199,7 +258,7 @@ class Task : public TaskBase {
     }
 
   private:
-    mutable promise_type::Handle handle_;
+    mutable typename promise_type::Handle handle_;
 };
 
 } // namespace vial

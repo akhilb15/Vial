@@ -1,7 +1,9 @@
 cc_library(
-    name = "core",
+    name = "net",
     srcs = glob(["*.cc"]),
     hdrs = glob(["*.hh"]),
     visibility = ["//visibility:public"],
-    linkopts = ["-lpthread", "-O3"],
+    deps = [
+        "//vial/core:core",
+    ],
 )

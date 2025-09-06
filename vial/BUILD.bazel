@@ -1,0 +1,9 @@
+cc_library(
+    name = "vial",
+    hdrs = ["async_main.hh"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vial/core:core",
+        "//vial/net:net",
+    ],
+)

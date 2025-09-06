@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "core/task.hh"
+#include "vial/core/task.hh"
 
 TEST(TaskUnit, SimpleContinuation) {
   auto bottom = [](int* t) -> vial::Task<int> {

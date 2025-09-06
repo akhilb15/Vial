@@ -1,8 +1,10 @@
 #include "scheduler.hh"
-#include "core/task.hh"
+#include "task.hh"
+#include "io/io_awaitables.hh"
 #include <thread>
 #include <cassert>
 #include <set>
+#include <iostream>
 
 namespace vial {
 
@@ -53,16 +55,19 @@ void Scheduler::run_worker(size_t worker_id) {
         TaskState state = task->get_state();
 
         if (state != kComplete) {
-            TaskBase* to_delete = task->get_awaiting();
+            TaskBase* task_to_delete = task->get_awaiting();
+            IOAwaitable* io_awaitable_to_delete = task->get_io_awaitable();
             task->clear_awaiting();
+            task->clear_io_awaitable();
 
             state = task->run();
 
-            if (to_delete != nullptr) {
-                to_delete->destroy();
+            if (task_to_delete != nullptr) {
+                task_to_delete->destroy();
             }
 
-            delete to_delete;
+            delete task_to_delete;
+            delete io_awaitable_to_delete;
         }
 
         switch (state) {
@@ -76,10 +81,22 @@ void Scheduler::run_worker(size_t worker_id) {
                 }
             } break;
 
+            case kBlockedOnIO: {
+                // if blocked on IO, register callback with event loop
+                auto *io_awaitable = task->get_io_awaitable();
+                io_awaitable->register_with_event_loop([task, this, worker_id]() {
+                    task->set_state(kAwaiting);
+                    push_task(task->clone(), worker_id);
+                });
+            } break;
+
             case kComplete: {
-                // On completion, a task should either push its callback or return the queue to wait for a callback.
                 if (task->get_callback() != nullptr) {
                     push_task(task->get_callback(), worker_id);
+                    // delete task;
+                } else if (task->should_delete_on_completion()) {
+                    // task is fire and forget, and will not be co_awaited/have a callback
+                    task->destroy();
                     delete task;
                 } else {
                     push_task(task, worker_id);
